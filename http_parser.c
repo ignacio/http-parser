@@ -38,31 +38,9 @@ typedef unsigned __int32 uint32_t;
 #endif
 
 
-#define CALLBACK2(FOR)                                               \
-do {                                                                 \
-  if (settings->on_##FOR) {                                          \
-    if (0 != settings->on_##FOR(parser)) return (p - data);          \
-  }                                                                  \
-} while (0)
-
-
 #define MARK(FOR)                                                    \
 do {                                                                 \
   FOR##_mark = p;                                                    \
-} while (0)
-
-#define CALLBACK_NOCLEAR(FOR)                                        \
-do {                                                                 \
-  if (FOR##_mark) {                                                  \
-    if (settings->on_##FOR) {                                        \
-      if (0 != settings->on_##FOR(parser,                            \
-                                 FOR##_mark,                         \
-                                 p - FOR##_mark))                    \
-      {                                                              \
-        return (p - data);                                           \
-      }                                                              \
-    }                                                                \
-  }                                                                  \
 } while (0)
 
 
@@ -70,6 +48,27 @@ do {                                                                 \
 do {                                                                 \
   CALLBACK_NOCLEAR(FOR);                                             \
   FOR##_mark = NULL;                                                 \
+} while (0)
+
+
+#define RECORD_MARK(FOR)                                            \
+do {                                                                \
+  assert(ptr_index + 1 < ptrs_len);                                 \
+  ptrs[ptr_index].p = FOR##_mark;                                   \
+  ptrs[ptr_index].len = data - FOR##_mark;                          \
+  ptrs[ptr_index].type = HTTP_PTR_##FOR;                            \
+  ptr_index++;                                                      \
+  ptrs[ptr_index].type = HTTP_PTR_LAST;                             \
+} while (0)
+
+#define RECORD(FOR)                                                 \
+do {                                                                \
+  assert(ptr_index + 1 < ptrs_len);                                 \
+  ptrs[ptr_index].p = data;                                         \
+  ptrs[ptr_index].len = 0;                                          \
+  ptrs[ptr_index].type = HTTP_PTR_##FOR;                            \
+  ptr_index++;                                                      \
+  ptrs[ptr_index].type = HTTP_PTR_LAST;                             \
 } while (0)
 
 
@@ -315,57 +314,71 @@ enum flags
 # define NEW_MESSAGE() start_state
 #endif
 
-
-size_t http_parser_execute (http_parser *parser,
-                            const http_parser_settings *settings,
+size_t http_parser_execute2(http_parser *parser,
                             const char *data,
-                            size_t len)
+                            size_t data_len,
+                            http_parser_ptr ptrs[],
+                            int ptrs_len)
 {
   char c, ch;
   const char *p = data, *pe;
   int64_t to_read;
+  int ptr_index = 0;
 
   enum state state = (enum state) parser->state;
   enum header_states header_state = (enum header_states) parser->header_state;
   uint64_t index = parser->index;
   uint64_t nread = parser->nread;
 
+  /* We need at least a few ptrs... */
+  assert(ptrs_len > 3);
+  ptrs[ptr_index].type = HTTP_PTR_LAST;
+
   if (len == 0) {
     if (state == s_body_identity_eof) {
-      CALLBACK2(message_complete);
+      ptrs[0].p = NULL;
+      ptrs[0].len = 0;
+      ptrs[0].type = HTTP_PTR_MESSAGE_COMPLETE;
+
+      ptrs[1].p = NULL;
+      ptrs[1].len = 0;
+      ptrs[1].type = HTTP_PTR_LAST;
     }
     return 0;
   }
 
-  /* technically we could combine all of these (except for url_mark) into one
+  /* technically we could combine all of these (except for URL_mark) into one
      variable, saving stack space, but it seems more clear to have them
      separated. */
-  const char *header_field_mark = 0;
-  const char *header_value_mark = 0;
-  const char *fragment_mark = 0;
-  const char *query_string_mark = 0;
-  const char *path_mark = 0;
-  const char *url_mark = 0;
+  const char *HEADER_FIELD_mark = 0;
+  const char *HEADER_VALUE_mark = 0;
+  const char *FRAGMENT_mark = 0;
+  const char *QUERY_STRING_mark = 0;
+  const char *PATH_mark = 0;
+  const char *URL_mark = 0;
 
   if (state == s_header_field)
-    header_field_mark = data;
+    HEADER_FIELD_mark = data;
   if (state == s_header_value)
-    header_value_mark = data;
+    HEADER_VALUE_mark = data;
   if (state == s_req_fragment)
-    fragment_mark = data;
+    FRAGMENT_mark = data;
   if (state == s_req_query_string)
-    query_string_mark = data;
+    QUERY_STRING_mark = data;
   if (state == s_req_path)
-    path_mark = data;
+    PATH_mark = data;
   if (state == s_req_path || state == s_req_schema || state == s_req_schema_slash
       || state == s_req_schema_slash_slash || state == s_req_port
       || state == s_req_query_string_start || state == s_req_query_string
       || state == s_req_host
       || state == s_req_fragment_start || state == s_req_fragment)
-    url_mark = data;
+    URL_mark = data;
 
   for (p=data, pe=data+len; p != pe; p++) {
     ch = *p;
+
+    /* You always need a litte room to drop a HTTP_PTR_LAST. */
+    assert(ptr_index + 3 < ptrs_len);
 
     if (PARSING_HEADER(state)) {
       ++nread;
@@ -388,7 +401,7 @@ size_t http_parser_execute (http_parser *parser,
         parser->flags = 0;
         parser->content_length = -1;
 
-        CALLBACK2(message_begin);
+        RECORD(MESSAGE_BEGIN);
 
         if (ch == 'H')
           state = s_res_or_resp_H;
@@ -417,7 +430,7 @@ size_t http_parser_execute (http_parser *parser,
         parser->flags = 0;
         parser->content_length = -1;
 
-        CALLBACK2(message_begin);
+        RECORD(message_begin);
 
         switch (ch) {
           case 'H':
@@ -566,7 +579,7 @@ size_t http_parser_execute (http_parser *parser,
         parser->flags = 0;
         parser->content_length = -1;
 
-        CALLBACK2(message_begin);
+        RECORD(message_begin);
 
         if (ch < 'A' || 'Z' < ch) goto error;
 
@@ -633,8 +646,8 @@ size_t http_parser_execute (http_parser *parser,
         if (ch == ' ') break;
 
         if (ch == '/') {
-          MARK(url);
-          MARK(path);
+          MARK(URL);
+          MARK(PATH);
           state = s_req_path;
           break;
         }
@@ -642,7 +655,7 @@ size_t http_parser_execute (http_parser *parser,
         c = LOWER(ch);
 
         if (c >= 'a' && c <= 'z') {
-          MARK(url);
+          MARK(URL);
           state = s_req_schema;
           break;
         }
@@ -687,7 +700,7 @@ size_t http_parser_execute (http_parser *parser,
             state = s_req_port;
             break;
           case '/':
-            MARK(path);
+            MARK(PATH);
             state = s_req_path;
             break;
           case ' ':
@@ -695,7 +708,7 @@ size_t http_parser_execute (http_parser *parser,
              *   "GET http://foo.bar.com HTTP/1.1"
              * That is, there is no path.
              */
-            CALLBACK(url);
+            RECORD_MARK(URL);
             state = s_req_http_start;
             break;
           default:
@@ -709,7 +722,7 @@ size_t http_parser_execute (http_parser *parser,
         if (ch >= '0' && ch <= '9') break;
         switch (ch) {
           case '/':
-            MARK(path);
+            MARK(PATH);
             state = s_req_path;
             break;
           case ' ':
@@ -717,7 +730,7 @@ size_t http_parser_execute (http_parser *parser,
              *   "GET http://foo.bar.com:1234 HTTP/1.1"
              * That is, there is no path.
              */
-            CALLBACK(url);
+            RECORD_MARK(URL);
             state = s_req_http_start;
             break;
           default:
@@ -732,28 +745,28 @@ size_t http_parser_execute (http_parser *parser,
 
         switch (ch) {
           case ' ':
-            CALLBACK(url);
-            CALLBACK(path);
+            RECORD_MARK(URL);
+            RECORD_MARK(PATH);
             state = s_req_http_start;
             break;
           case CR:
-            CALLBACK(url);
-            CALLBACK(path);
+            RECORD_MARK(URL);
+            RECORD_MARK(PATH);
             parser->http_minor = 9;
             state = s_req_line_almost_done;
             break;
           case LF:
-            CALLBACK(url);
-            CALLBACK(path);
+            RECORD_MARK(URL);
+            RECORD_MARK(PATH);
             parser->http_minor = 9;
             state = s_header_field_start;
             break;
           case '?':
-            CALLBACK(path);
+            RECORD_MARK(PATH);
             state = s_req_query_string_start;
             break;
           case '#':
-            CALLBACK(path);
+            RECORD_MARK(PATH);
             state = s_req_fragment_start;
             break;
           default:
@@ -765,7 +778,7 @@ size_t http_parser_execute (http_parser *parser,
       case s_req_query_string_start:
       {
         if (normal_url_char[(unsigned char)ch]) {
-          MARK(query_string);
+          MARK(QUERY_STRING);
           state = s_req_query_string;
           break;
         }
@@ -774,16 +787,16 @@ size_t http_parser_execute (http_parser *parser,
           case '?':
             break; /* XXX ignore extra '?' ... is this right? */
           case ' ':
-            CALLBACK(url);
+            RECORD_MARK(URL);
             state = s_req_http_start;
             break;
           case CR:
-            CALLBACK(url);
+            RECORD_MARK(URL);
             parser->http_minor = 9;
             state = s_req_line_almost_done;
             break;
           case LF:
-            CALLBACK(url);
+            RECORD_MARK(URL);
             parser->http_minor = 9;
             state = s_header_field_start;
             break;
@@ -805,24 +818,24 @@ size_t http_parser_execute (http_parser *parser,
             /* allow extra '?' in query string */
             break;
           case ' ':
-            CALLBACK(url);
-            CALLBACK(query_string);
+            RECORD_MARK(URL);
+            RECORD_MARK(QUERY_STRING);
             state = s_req_http_start;
             break;
           case CR:
-            CALLBACK(url);
-            CALLBACK(query_string);
+            RECORD_MARK(URL);
+            RECORD_MARK(QUERY_STRING);
             parser->http_minor = 9;
             state = s_req_line_almost_done;
             break;
           case LF:
-            CALLBACK(url);
-            CALLBACK(query_string);
+            RECORD_MARK(URL);
+            RECORD_MARK(QUERY_STRING);
             parser->http_minor = 9;
             state = s_header_field_start;
             break;
           case '#':
-            CALLBACK(query_string);
+            RECORD_MARK(QUERY_STRING);
             state = s_req_fragment_start;
             break;
           default:
@@ -834,28 +847,28 @@ size_t http_parser_execute (http_parser *parser,
       case s_req_fragment_start:
       {
         if (normal_url_char[(unsigned char)ch]) {
-          MARK(fragment);
+          MARK(FRAGMENT);
           state = s_req_fragment;
           break;
         }
 
         switch (ch) {
           case ' ':
-            CALLBACK(url);
+            RECORD_MARK(URL);
             state = s_req_http_start;
             break;
           case CR:
-            CALLBACK(url);
+            RECORD_MARK(URL);
             parser->http_minor = 9;
             state = s_req_line_almost_done;
             break;
           case LF:
-            CALLBACK(url);
+            RECORD_MARK(URL);
             parser->http_minor = 9;
             state = s_header_field_start;
             break;
           case '?':
-            MARK(fragment);
+            RECORD_MARK(FRAGMENT);
             state = s_req_fragment;
             break;
           case '#':
@@ -872,19 +885,19 @@ size_t http_parser_execute (http_parser *parser,
 
         switch (ch) {
           case ' ':
-            CALLBACK(url);
-            CALLBACK(fragment);
+            RECORD_MARK(URL);
+            RECORD_MARK(FRAGMENT);
             state = s_req_http_start;
             break;
           case CR:
-            CALLBACK(url);
-            CALLBACK(fragment);
+            RECORD_MARK(URL);
+            RECORD_MARK(FRAGMENT);
             parser->http_minor = 9;
             state = s_req_line_almost_done;
             break;
           case LF:
-            CALLBACK(url);
-            CALLBACK(fragment);
+            RECORD_MARK(URL);
+            RECORD_MARK(FRAGMENT);
             parser->http_minor = 9;
             state = s_header_field_start;
             break;
@@ -1010,7 +1023,7 @@ size_t http_parser_execute (http_parser *parser,
 
         if (c < 'a' || 'z' < c) goto error;
 
-        MARK(header_field);
+        MARK(HEADER_FIELD);
 
         index = 0;
         state = s_header_field;
@@ -1148,19 +1161,19 @@ size_t http_parser_execute (http_parser *parser,
         }
 
         if (ch == ':') {
-          CALLBACK(header_field);
+          RECORD_MARK(HEADER_FIELD);
           state = s_header_value_start;
           break;
         }
 
         if (ch == CR) {
           state = s_header_almost_done;
-          CALLBACK(header_field);
+          RECORD_MARK(HEADER_FIELD);
           break;
         }
 
         if (ch == LF) {
-          CALLBACK(header_field);
+          RECORD_MARK(HEADER_FIELD);
           state = s_header_field_start;
           break;
         }
@@ -1172,7 +1185,7 @@ size_t http_parser_execute (http_parser *parser,
       {
         if (ch == ' ') break;
 
-        MARK(header_value);
+        MARK(HEADER_VALUE);
 
         state = s_header_value;
         index = 0;
@@ -1181,14 +1194,14 @@ size_t http_parser_execute (http_parser *parser,
 
         if (!c) {
           if (ch == CR) {
-            CALLBACK(header_value);
+            RECORD_MARK(HEADER_VALUE);
             header_state = h_general;
             state = s_header_almost_done;
             break;
           }
 
           if (ch == LF) {
-            CALLBACK(header_value);
+            RECORD_MARK(HEADER_VALUE);
             state = s_header_field_start;
             break;
           }
@@ -1242,13 +1255,13 @@ size_t http_parser_execute (http_parser *parser,
 
         if (!c) {
           if (ch == CR) {
-            CALLBACK(header_value);
+            RECORD_MARK(HEADER_VALUE);
             state = s_header_almost_done;
             break;
           }
 
           if (ch == LF) {
-            CALLBACK(header_value);
+            RECORD_MARK(HEADER_VALUE);
             goto header_almost_done;
           }
           break;
@@ -1345,7 +1358,7 @@ size_t http_parser_execute (http_parser *parser,
 
         if (parser->flags & F_TRAILING) {
           /* End of a chunked request */
-          CALLBACK2(message_complete);
+          RECORD(MESSAGE_COMPLETE);
           state = NEW_MESSAGE();
           break;
         }
@@ -1378,12 +1391,12 @@ size_t http_parser_execute (http_parser *parser,
 
         /* Exit, the rest of the connect is in a different protocol. */
         if (parser->upgrade) {
-          CALLBACK2(message_complete);
+          RECORD(MESSAGE_COMPLETE);
           return (p - data);
         }
 
         if (parser->flags & F_SKIPBODY) {
-          CALLBACK2(message_complete);
+          RECORD(MESSAGE_COMPLETE);
           state = NEW_MESSAGE();
         } else if (parser->flags & F_CHUNKED) {
           /* chunked encoding - ignore Content-Length header */
@@ -1391,7 +1404,7 @@ size_t http_parser_execute (http_parser *parser,
         } else {
           if (parser->content_length == 0) {
             /* Content-Length header given but zero: Content-Length: 0\r\n */
-            CALLBACK2(message_complete);
+            RECORD(MESSAGE_COMPLETE);
             state = NEW_MESSAGE();
           } else if (parser->content_length > 0) {
             /* Content-Length header given and non-zero */
@@ -1399,7 +1412,7 @@ size_t http_parser_execute (http_parser *parser,
           } else {
             if (parser->type == HTTP_REQUEST || http_should_keep_alive(parser)) {
               /* Assume content-length 0 - read the next */
-              CALLBACK2(message_complete);
+              RECORD(MESSAGE_COMPLETE);
               state = NEW_MESSAGE();
             } else {
               /* Read body until EOF */
@@ -1418,7 +1431,7 @@ size_t http_parser_execute (http_parser *parser,
           p += to_read - 1;
           parser->content_length -= to_read;
           if (parser->content_length == 0) {
-            CALLBACK2(message_complete);
+            RECORD(MESSAGE_COMPLETE);
             state = NEW_MESSAGE();
           }
         }
@@ -1547,6 +1560,103 @@ size_t http_parser_execute (http_parser *parser,
 error:
   parser->state = s_dead;
   return (p - data);
+}
+
+
+
+#define CALLBACK(FOR)                                                \
+do {                                                                 \
+  if (settings->on_##FOR) {                                          \
+    if (0 != settings->on_##FOR(parser, ptrs[i].p, ptrs[i].len)) {   \
+      return (ptrs[i].p - data);                                     \
+    }                                                                \
+  }                                                                  \
+} while (0)
+
+
+#define CALLBACK2(FOR)                                               \
+do {                                                                 \
+  if (settings->on_##FOR) {                                          \
+    if (0 != settings->on_##FOR(parser)) return (ptrs[i].p - data);  \
+  }                                                                  \
+} while (0)
+
+
+size_t http_parser_execute (http_parser *parser,
+                            const http_parser_settings *settings,
+                            const char *data,
+                            size_t len)
+{
+  http_parser_ptr ptrs[50];
+  int i;
+
+  size_t nparsed = http_parser_execute2(parser, data, len, ptrs, 50);
+
+  for (i = 0; ptrs[i].p; i++) {
+    assert(i < 50);
+
+    switch (ptrs[i].type != HTTP_PTR_LAST) {
+      case HTTP_PTR_MESSAGE_BEGIN:
+        CALLBACK2(message_begin);
+        break;
+
+      case HTTP_PTR_URL:
+        CALLBACK(url);
+        break;
+
+      case HTTP_PTR_PATH:
+        CALLBACK(path);
+        break;
+
+      case HTTP_PTR_QUERY_STRING:
+        CALLBACK(query_string);
+        break;
+
+      case HTTP_PTR_FRAGMENT:
+        CALLBACK(fragment);
+        break;
+
+      case HTTP_PTR_HEADER_FIELD:
+        CALLBACK(header_field);
+        break;
+
+      case HTTP_PTR_HEADER_VALUE:
+        CALLBACK(header_value);
+        break;
+
+      case HTTP_PTR_HEADERS_COMPLETE:
+        if (settings->on_headers_complete) {
+          switch (settings->on_headers_complete(parser)) {
+            case 0:
+              break;
+
+            case 1:
+              http_parser_no_body(parser);
+              break;
+
+            default:
+              return ptrs[i].p - data; /* Error */
+          }
+        }
+        break;
+
+      case HTTP_PTR_BODY:
+        CALLBACK(body);
+        break;
+
+      case HTTP_PTR_MESSAGE_COMPLETE:
+        CALLBACK2(message_end);
+        break;
+    }
+  }
+
+  return nparsed;
+}
+
+
+void http_parser_no_body (http_parser *parser)
+{
+  parser->flags |= F_SKIPBODY;
 }
 
 

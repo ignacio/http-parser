@@ -48,24 +48,6 @@ typedef int ssize_t;
 
 
 typedef struct http_parser http_parser;
-typedef struct http_parser_settings http_parser_settings;
-
-
-/* Callbacks should return non-zero to indicate an error. The parser will
- * then halt execution.
- *
- * The one exception is on_headers_complete. In a HTTP_RESPONSE parser
- * returning '1' from on_headers_complete will tell the parser that it
- * should not expect a body. This is used when receiving a response to a
- * HEAD request which may contain 'Content-Length' or 'Transfer-Encoding:
- * chunked' headers that indicate the presence of a body.
- *
- * http_data_cb does not return data chunks. It will be call arbitrarally
- * many times for each string. E.G. you might get 10 callbacks for "on_path"
- * each providing just a few characters more data.
- */
-typedef int (*http_data_cb) (http_parser*, const char *at, size_t length);
-typedef int (*http_cb) (http_parser*);
 
 
 /* Request Methods */
@@ -127,6 +109,45 @@ struct http_parser {
 };
 
 
+void http_parser_init(http_parser *parser, enum http_parser_type type);
+
+
+/* If http_should_keep_alive() in the on_headers_complete or
+ * on_message_complete callback returns true, then this will be should be
+ * the last message on the connection.
+ * If you are the server, respond with the "Connection: close" header.
+ * If you are the client, close the connection.
+ */
+int http_should_keep_alive(http_parser *parser);
+
+
+/* Returns a string version of the HTTP method. */
+const char *http_method_str(enum http_method);
+
+
+
+
+/********* Parser Interface 1 *********/
+/* For those who like callbacks       */
+
+
+/* Callbacks should return non-zero to indicate an error. The parser will
+ * then halt execution.
+ *
+ * The one exception is on_headers_complete. In a HTTP_RESPONSE parser
+ * returning '1' from on_headers_complete will tell the parser that it
+ * should not expect a body. This is used when receiving a response to a
+ * HEAD request which may contain 'Content-Length' or 'Transfer-Encoding:
+ * chunked' headers that indicate the presence of a body.
+ *
+ * http_data_cb does not return data chunks. It will be call arbitrarally
+ * many times for each string. E.G. you might get 10 callbacks for "on_path"
+ * each providing just a few characters more data.
+ */
+typedef int (*http_data_cb) (http_parser*, const char *at, size_t length);
+typedef int (*http_cb) (http_parser*);
+typedef struct http_parser_settings http_parser_settings;
+
 struct http_parser_settings {
   http_cb      on_message_begin;
   http_data_cb on_path;
@@ -140,26 +161,43 @@ struct http_parser_settings {
   http_cb      on_message_complete;
 };
 
-
-void http_parser_init(http_parser *parser, enum http_parser_type type);
-
-
 size_t http_parser_execute(http_parser *parser,
                            const http_parser_settings *settings,
                            const char *data,
                            size_t len);
 
 
-/* If http_should_keep_alive() in the on_headers_complete or
- * on_message_complete callback returns true, then this will be should be
- * the last message on the connection.
- * If you are the server, respond with the "Connection: close" header.
- * If you are the client, close the connection.
- */
-int http_should_keep_alive(http_parser *parser);
 
-/* Returns a string version of the HTTP method. */
-const char *http_method_str(enum http_method);
+
+/********* Parser Interface 2 *********/
+/* For those who don't like callbacks */
+
+
+typedef struct http_parser_ptr http_parser_ptr;
+
+struct http_parser_ptr {
+  const char *p;
+  size_t len;
+  enum { HTTP_PTR_LAST = 0
+       , HTTP_PTR_MESSAGE_BEGIN
+       , HTTP_PTR_PATH
+       , HTTP_PTR_QUERY_STRING
+       , HTTP_PTR_URL
+       , HTTP_PTR_FRAGMENT
+       , HTTP_PTR_HEADER_FIELD
+       , HTTP_PTR_HEADER_VALUE
+       , HTTP_PTR_HEADERS_COMPLETE
+       , HTTP_PTR_BODY
+       , HTTP_PTR_MESSAGE_COMPLETE
+       } type;
+};
+
+size_t http_parser_execute2(http_parser *parser,
+                            const char *data,
+                            size_t data_len,
+                            http_parser_ptr ptrs[],
+                            int ptrs_len);
+
 
 #ifdef __cplusplus
 }
