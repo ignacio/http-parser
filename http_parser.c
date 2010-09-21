@@ -334,7 +334,7 @@ size_t http_parser_execute2(http_parser *parser,
   assert(ptrs_len > 3);
   ptrs[ptr_index].type = HTTP_PTR_LAST;
 
-  if (len == 0) {
+  if (data_len == 0) {
     if (state == s_body_identity_eof) {
       ptrs[0].p = NULL;
       ptrs[0].len = 0;
@@ -374,7 +374,7 @@ size_t http_parser_execute2(http_parser *parser,
       || state == s_req_fragment_start || state == s_req_fragment)
     URL_mark = data;
 
-  for (p=data, pe=data+len; p != pe; p++) {
+  for (p=data, pe=data+data_len; p != pe; p++) {
     ch = *p;
 
     /* You always need a litte room to drop a HTTP_PTR_LAST. */
@@ -430,7 +430,7 @@ size_t http_parser_execute2(http_parser *parser,
         parser->flags = 0;
         parser->content_length = -1;
 
-        RECORD(message_begin);
+        RECORD(MESSAGE_BEGIN);
 
         switch (ch) {
           case 'H':
@@ -579,7 +579,7 @@ size_t http_parser_execute2(http_parser *parser,
         parser->flags = 0;
         parser->content_length = -1;
 
-        RECORD(message_begin);
+        RECORD(MESSAGE_BEGIN);
 
         if (ch < 'A' || 'Z' < ch) goto error;
 
@@ -1369,25 +1369,8 @@ size_t http_parser_execute2(http_parser *parser,
           parser->upgrade = 1;
         }
 
-        /* Here we call the headers_complete callback. This is somewhat
-         * different than other callbacks because if the user returns 1, we
-         * will interpret that as saying that this message has no body. This
-         * is needed for the annoying case of recieving a response to a HEAD
-         * request.
-         */
-        if (settings->on_headers_complete) {
-          switch (settings->on_headers_complete(parser)) {
-            case 0:
-              break;
-
-            case 1:
-              parser->flags |= F_SKIPBODY;
-              break;
-
-            default:
-              return p - data; /* Error */
-          }
-        }
+        // ???
+        RECORD(HEADERS_COMPLETE);
 
         /* Exit, the rest of the connect is in a different protocol. */
         if (parser->upgrade) {
@@ -1555,7 +1538,7 @@ size_t http_parser_execute2(http_parser *parser,
   parser->index = index;
   parser->nread = nread;
 
-  return len;
+  return data_len;
 
 error:
   parser->state = s_dead;

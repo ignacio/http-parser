@@ -169,8 +169,9 @@ size_t http_parser_execute(http_parser *parser,
 
 
 
-/********* Parser Interface 2 *********/
-/* For those who don't like callbacks */
+/********** Parser Interface 2 **********/
+/** For those who don't like callbacks **/
+/****************************************/
 
 
 typedef struct http_parser_ptr http_parser_ptr;
