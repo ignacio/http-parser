@@ -385,6 +385,12 @@ int http_parser_execute2(http_parser *parser,
     return 0;
   }
 
+  if (state == s_decide_body) {
+    assert(parser->type == HTTP_RESPONSE);
+    state = body_logic(parser, p, data, data_len, &data_index);
+
+  } 
+
   if (buf_len == 0) {
     if (state == s_body_identity_eof) {
       RECORD(MESSAGE_END);
@@ -392,10 +398,6 @@ int http_parser_execute2(http_parser *parser,
     goto exit;
   }
 
-  if (state == s_decide_body) {
-    assert(parser->type == HTTP_RESPONSE);
-    state = body_logic(parser, p, data, data_len, &data_index);
-  }
 
   /* technically we could combine all of these (except for URL_mark) into one
      variable, saving stack space, but it seems more clear to have them
