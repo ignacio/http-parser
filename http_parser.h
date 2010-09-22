@@ -177,26 +177,43 @@ size_t http_parser_execute(http_parser *parser,
 typedef struct http_parser_data http_parser_data;
 
 struct http_parser_data {
-  const char *p;
-  size_t len;
   enum { HTTP_PARSER_ERROR = 0
        , HTTP_NEEDS_INPUT
        , HTTP_NEEDS_DATA_ELEMENTS
-
-       , HTTP_MESSAGE_START
-       , HTTP_PATH
-       , HTTP_QUERY_STRING
-       , HTTP_URL
-       , HTTP_FRAGMENT
-       , HTTP_HEADER_FIELD
-       , HTTP_HEADER_VALUE
-
-       , HTTP_HEADERS_END
-
-       , HTTP_BODY
-
-       , HTTP_MESSAGE_END
+       , HTTP_REQ_MESSAGE_START   /* payload.method */
+       , HTTP_RES_MESSAGE_START   /* payload.status */
+       , HTTP_VERSION             /* payload.version */
+       , HTTP_PATH                /* payload.string */
+       , HTTP_QUERY_STRING        /* payload.string */
+       , HTTP_URL                 /* payload.string */
+       , HTTP_FRAGMENT            /* payload.string */
+       , HTTP_HEADER_FIELD        /* payload.string */
+       , HTTP_HEADER_VALUE        /* payload.string */
+       , HTTP_HEADERS_END         /* payload.string */
+       , HTTP_BODY                /* payload.string */
+       , HTTP_MESSAGE_END         /* payload.string */
        } type;
+
+  union {
+    struct {
+      const char *p;
+      size_t len;
+    } string;
+
+    /* For HTTP_RES_MESSAGE_START */
+    unsigned short status_code;
+
+    /* For HTTP_REQ_MESSAGE_START */
+    unsigned char method;
+
+    /* For HTTP_VERSION */
+    struct {
+      unsigned short major;
+      unsigned short minor;
+    } version;
+
+  } payload;
+
 };
 
 /* Returns the number of elements filled into `data`.

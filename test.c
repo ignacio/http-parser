@@ -845,7 +845,7 @@ const struct message responses[] =
 int
 request_path_cb (http_parser *p, const char *buf, size_t len)
 {
-  assert(p == parser);
+  assert(p->data == parser->data);
   strncat(messages[num_messages].request_path, buf, len);
   return 0;
 }
@@ -853,7 +853,7 @@ request_path_cb (http_parser *p, const char *buf, size_t len)
 int
 request_url_cb (http_parser *p, const char *buf, size_t len)
 {
-  assert(p == parser);
+  assert(p->data == parser->data);
   strncat(messages[num_messages].request_url, buf, len);
   return 0;
 }
@@ -861,7 +861,7 @@ request_url_cb (http_parser *p, const char *buf, size_t len)
 int
 query_string_cb (http_parser *p, const char *buf, size_t len)
 {
-  assert(p == parser);
+  assert(p->data == parser->data);
   strncat(messages[num_messages].query_string, buf, len);
   return 0;
 }
@@ -869,7 +869,7 @@ query_string_cb (http_parser *p, const char *buf, size_t len)
 int
 fragment_cb (http_parser *p, const char *buf, size_t len)
 {
-  assert(p == parser);
+  assert(p->data == parser->data);
   strncat(messages[num_messages].fragment, buf, len);
   return 0;
 }
@@ -877,7 +877,7 @@ fragment_cb (http_parser *p, const char *buf, size_t len)
 int
 header_field_cb (http_parser *p, const char *buf, size_t len)
 {
-  assert(p == parser);
+  assert(p->data == parser->data);
   struct message *m = &messages[num_messages];
 
   if (m->last_header_element != FIELD)
@@ -893,7 +893,7 @@ header_field_cb (http_parser *p, const char *buf, size_t len)
 int
 header_value_cb (http_parser *p, const char *buf, size_t len)
 {
-  assert(p == parser);
+  assert(p->data == parser->data);
   struct message *m = &messages[num_messages];
 
   strncat(m->headers[m->num_headers-1][1], buf, len);
@@ -906,7 +906,7 @@ header_value_cb (http_parser *p, const char *buf, size_t len)
 int
 body_cb (http_parser *p, const char *buf, size_t len)
 {
-  assert(p == parser);
+  assert(p->data == parser->data);
   strncat(messages[num_messages].body, buf, len);
   messages[num_messages].body_size += len;
  // printf("body_cb: '%s'\n", requests[num_messages].body);
@@ -916,7 +916,7 @@ body_cb (http_parser *p, const char *buf, size_t len)
 int
 count_body_cb (http_parser *p, const char *buf, size_t len)
 {
-  assert(p == parser);
+  assert(p->data == parser->data);
   assert(buf);
   messages[num_messages].body_size += len;
   return 0;
@@ -925,7 +925,7 @@ count_body_cb (http_parser *p, const char *buf, size_t len)
 int
 message_begin_cb (http_parser *p)
 {
-  assert(p == parser);
+  assert(p->data == parser->data);
   messages[num_messages].message_begin_cb_called = TRUE;
   return 0;
 }
@@ -933,7 +933,7 @@ message_begin_cb (http_parser *p)
 int
 headers_complete_cb (http_parser *p)
 {
-  assert(p == parser);
+  assert(p->data == parser->data);
   messages[num_messages].method = parser->method;
   messages[num_messages].status_code = parser->status_code;
   messages[num_messages].http_major = parser->http_major;
@@ -946,8 +946,9 @@ headers_complete_cb (http_parser *p)
 int
 message_complete_cb (http_parser *p)
 {
-  assert(p == parser);
-  /*
+  assert(p->data == parser->data);
+#if 0
+  /* http_should_keep_alive() doesn't work with event_stream yet */
   if (messages[num_messages].should_keep_alive != http_should_keep_alive(parser))
   {
     fprintf(stderr, "\n\n *** Error http_should_keep_alive() should have same "
@@ -955,7 +956,7 @@ message_complete_cb (http_parser *p)
                     "but it doesn't! ***\n\n");
     EXIT();
   }
-  */
+#endif
   messages[num_messages].message_complete_cb_called = TRUE;
 
   messages[num_messages].message_complete_on_eof = currently_parsing_eof;
@@ -1357,13 +1358,15 @@ test_multiple3 (const struct message *r1, const struct message *r2, const struct
 
   parser_init(r1->type);
 
+  size_t total_len = strlen(total);
+
   size_t read;
 
-  read = parse(total, strlen(total));
+  read = parse(total, total_len);
 
   if (has_upgrade && parser->upgrade) goto test;
 
-  if (read != strlen(total)) {
+  if (read != total_len) {
     print_error(total, read);
     EXIT();
   }
@@ -1613,7 +1616,6 @@ main (void)
   }
 
 
-
   printf("response scan 1/2      ");
   test_scan( &responses[TRAILING_SPACE_ON_CHUNKED_BODY]
            , &responses[NO_HEADERS_NO_BODY_404]
@@ -1625,7 +1627,6 @@ main (void)
            , &responses[UNDERSTORE_HEADER_KEY]
            , &responses[NO_CARRIAGE_RET]
            );
-
   puts("responses okay");
 
 

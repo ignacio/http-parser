@@ -44,8 +44,8 @@ typedef unsigned __int32 uint32_t;
 do {                                              \
   if (FOR##_mark) {                               \
     assert(data_index + 1 < data_len);            \
-    data[data_index].p = FOR##_mark;              \
-    data[data_index].len = p - FOR##_mark;        \
+    data[data_index].payload.string.p = FOR##_mark; \
+    data[data_index].payload.string.len = p - FOR##_mark; \
     data[data_index].type = HTTP_##FOR;           \
     data_index++;                                 \
   }                                               \
@@ -54,11 +54,12 @@ do {                                              \
 #define RECORD_BODY(LEN)                          \
 do {                                              \
   assert(data_index + 1 < data_len);              \
-  data[data_index].p = p;                         \
-  data[data_index].len = (LEN);                   \
+  data[data_index].payload.string.p = p;          \
+  data[data_index].payload.string.len = (LEN);    \
   data[data_index].type = HTTP_BODY;              \
   data_index++;                                   \
 } while (0)
+
 #define RECORD_MARK(FOR)                          \
 do {                                              \
   RECORD_MARK_NOCLEAR(FOR);                       \
@@ -68,8 +69,8 @@ do {                                              \
 #define RECORD(FOR)                               \
 do {                                              \
   assert(data_index + 1 < data_len);              \
-  data[data_index].p = p;                         \
-  data[data_index].len = 0;                       \
+  data[data_index].payload.string.p = p;          \
+  data[data_index].payload.string.len = 0;        \
   data[data_index].type = HTTP_##FOR;             \
   data_index++;                                   \
 } while (0)
@@ -453,8 +454,6 @@ int http_parser_execute2(http_parser *parser,
         parser->flags = 0;
         parser->content_length = -1;
 
-        RECORD(MESSAGE_START);
-
         if (ch == 'H')
           state = s_res_or_resp_H;
         else {
@@ -481,8 +480,6 @@ int http_parser_execute2(http_parser *parser,
       {
         parser->flags = 0;
         parser->content_length = -1;
-
-        RECORD(MESSAGE_START);
 
         switch (ch) {
           case 'H':
@@ -582,6 +579,22 @@ int http_parser_execute2(http_parser *parser,
       case s_res_status_code:
       {
         if (ch < '0' || ch > '9') {
+
+          /* assert the last data element, if any, was not an HTTP_VERSION. */
+          assert(data_index == 0 || data[data_index-1].type != HTTP_VERSION);
+
+          /* START OF RESPONSE */
+          assert(data_index + 2 < data_len);
+          data[data_index].type = HTTP_RES_MESSAGE_START;
+          data[data_index].payload.status_code = parser->status_code;
+          data_index++;
+
+          data[data_index].type = HTTP_VERSION;
+          data[data_index].payload.version.major = parser->http_major;
+          data[data_index].payload.version.minor = parser->http_minor;
+          data_index++;
+          
+
           switch (ch) {
             case ' ':
               state = s_res_status;
@@ -631,8 +644,6 @@ int http_parser_execute2(http_parser *parser,
         parser->flags = 0;
         parser->content_length = -1;
 
-        RECORD(MESSAGE_START);
-
         if (ch < 'A' || 'Z' < ch) goto error;
 
       start_req_method_assign:
@@ -664,6 +675,13 @@ int http_parser_execute2(http_parser *parser,
         const char *matcher = method_strings[parser->method];
         if (ch == ' ' && matcher[index] == '\0') {
           state = s_req_spaces_before_url;
+
+          /* START OF REQUEST */
+          assert(data_index + 1 < data_len);
+          data[data_index].type = HTTP_REQ_MESSAGE_START;
+          data[data_index].payload.method = parser->method;
+          data_index++;
+
         } else if (ch == matcher[index]) {
           ; /* nada */
         } else if (parser->method == HTTP_CONNECT) {
@@ -1028,6 +1046,19 @@ int http_parser_execute2(http_parser *parser,
       /* minor HTTP version or end of request line */
       case s_req_http_minor:
       {
+        if (data_index && data[data_index-1].type == HTTP_VERSION) {
+          /* only in the case of a second digit to http_minor */
+          assert(0); // mostly should happen. REMOVEME
+          assert(parser->http_minor > 10);
+          data[data_index-1].payload.version.minor = parser->http_minor;
+        } else {
+          assert(data_index + 1 < data_len);
+          data[data_index].type = HTTP_VERSION;
+          data[data_index].payload.version.major = parser->http_major;
+          data[data_index].payload.version.minor = parser->http_minor;
+          data_index++;
+        }
+
         if (ch == CR) {
           state = s_req_line_almost_done;
           break;
@@ -1601,8 +1632,10 @@ error:
 #define CALLBACK(FOR)                                                \
 do {                                                                 \
   if (settings->on_##FOR) {                                          \
-    if (0 != settings->on_##FOR(parser, data[i].p, data[i].len)) {   \
-      return (data[i].p - buf);                                      \
+    if (0 != settings->on_##FOR(&fake_parser,                        \
+                                data[i].payload.string.p,            \
+                                data[i].payload.string.len)) {       \
+      return (data[i].payload.string.p - buf);                       \
     }                                                                \
   }                                                                  \
 } while (0)
@@ -1611,7 +1644,8 @@ do {                                                                 \
 #define CALLBACK2(FOR)                                               \
 do {                                                                 \
   if (settings->on_##FOR) {                                          \
-    if (0 != settings->on_##FOR(parser)) return (data[i].p - buf);  \
+    if (0 != settings->on_##FOR(&fake_parser))                       \
+      return (data[i].payload.string.p - buf);                       \
   }                                                                  \
 } while (0)
 
@@ -1626,6 +1660,10 @@ size_t http_parser_execute (http_parser *parser,
   int i, ndata;
   size_t read = 0;
 
+  /* Fake the parser object being passed to the callbacks */
+  http_parser fake_parser;
+  fake_parser.data = parser->data;
+
   while (1) {
     ndata = http_parser_execute2(parser,
                                  buf + read,
@@ -1638,7 +1676,7 @@ size_t http_parser_execute (http_parser *parser,
         case HTTP_PARSER_ERROR:
           // HTTP_PARSER_ERROR should always be the last element of 'data'
           assert(ndata - 1 == i);
-          return data[i].p - buf;
+          return data[i].payload.string.p - buf;
 
         case HTTP_NEEDS_INPUT:
           // HTTP_NEEDS_INPUT should always be the last element of 'data'
@@ -1652,8 +1690,19 @@ size_t http_parser_execute (http_parser *parser,
           // Go around the while loop again.
           break;
 
-        case HTTP_MESSAGE_START:
+        case HTTP_REQ_MESSAGE_START:
+          fake_parser.method = data[i].payload.method;
           CALLBACK2(message_begin);
+          break;
+
+        case HTTP_RES_MESSAGE_START:
+          fake_parser.status_code = data[i].payload.status_code;
+          CALLBACK2(message_begin);
+          break;
+
+        case HTTP_VERSION:
+          fake_parser.http_major = data[i].payload.version.major;
+          fake_parser.http_minor = data[i].payload.version.minor;
           break;
 
         case HTTP_PATH:
@@ -1684,15 +1733,15 @@ size_t http_parser_execute (http_parser *parser,
           if (settings->on_headers_complete) {
             switch (settings->on_headers_complete(parser)) {
               case 0:
-                http_parser_has_body(parser, 1);
+                http_parser_has_body(&fake_parser, 1);
                 break;
 
               case 1:
-                http_parser_has_body(parser, 0);
+                http_parser_has_body(&fake_parser, 0);
                 break;
 
               default:
-                return data[i].p - buf; /* Error */
+                return data[i].payload.string.p - buf; /* Error */
             }
           }
           break;
@@ -1714,7 +1763,7 @@ size_t http_parser_execute (http_parser *parser,
         (data[ndata - 1].type == HTTP_NEEDS_INPUT ||
          data[ndata - 1].type == HTTP_NEEDS_DATA_ELEMENTS)) {
       /* We've parsed only as far as the data point */
-      read += data[ndata - 1].p - (buf+read) + 1;
+      read += data[ndata - 1].payload.string.p - (buf+read) + 1;
       continue;
     } else {
       /* We've parsed the whole thing that was passed in. */
