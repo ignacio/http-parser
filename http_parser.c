@@ -1453,7 +1453,12 @@ int http_parser_execute2(http_parser *parser,
         }
 
 
-        RECORD(HEADERS_END);
+        // RECORD HEADERS_END
+        assert(data_index + 1 < data_len);
+        data[data_index].type = HTTP_HEADERS_END;
+        data[data_index].payload.flags = parser->flags;
+        data_index++;
+
 
         /* Exit, the rest of the connect is in a different protocol. */
         if (parser->upgrade) {
@@ -1730,8 +1735,9 @@ size_t http_parser_execute (http_parser *parser,
           break;
 
         case HTTP_HEADERS_END:
+          fake_parser.flags = data[i].payload.flags;
           if (settings->on_headers_complete) {
-            switch (settings->on_headers_complete(parser)) {
+            switch (settings->on_headers_complete(&fake_parser)) {
               case 0:
                 http_parser_has_body(&fake_parser, 1);
                 break;

@@ -189,7 +189,7 @@ struct http_parser_data {
        , HTTP_FRAGMENT            /* payload.string */
        , HTTP_HEADER_FIELD        /* payload.string */
        , HTTP_HEADER_VALUE        /* payload.string */
-       , HTTP_HEADERS_END         /* payload.string */
+       , HTTP_HEADERS_END         /* payload.flags */
        , HTTP_BODY                /* payload.string */
        , HTTP_MESSAGE_END         /* payload.string */
        } type;
@@ -211,6 +211,9 @@ struct http_parser_data {
       unsigned short major;
       unsigned short minor;
     } version;
+
+    /* For HTTP_HEADERS_END */
+    unsigned char flags : 6;
 
   } payload;
 

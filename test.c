@@ -934,12 +934,12 @@ int
 headers_complete_cb (http_parser *p)
 {
   assert(p->data == parser->data);
-  messages[num_messages].method = parser->method;
-  messages[num_messages].status_code = parser->status_code;
-  messages[num_messages].http_major = parser->http_major;
-  messages[num_messages].http_minor = parser->http_minor;
+  messages[num_messages].method = p->method;
+  messages[num_messages].status_code = p->status_code;
+  messages[num_messages].http_major = p->http_major;
+  messages[num_messages].http_minor = p->http_minor;
   messages[num_messages].headers_complete_cb_called = TRUE;
-  messages[num_messages].should_keep_alive = http_should_keep_alive(parser);
+  messages[num_messages].should_keep_alive = http_should_keep_alive(p);
   return 0;
 }
 
@@ -947,16 +947,14 @@ int
 message_complete_cb (http_parser *p)
 {
   assert(p->data == parser->data);
-#if 0
   /* http_should_keep_alive() doesn't work with event_stream yet */
-  if (messages[num_messages].should_keep_alive != http_should_keep_alive(parser))
+  if (messages[num_messages].should_keep_alive != http_should_keep_alive(p))
   {
     fprintf(stderr, "\n\n *** Error http_should_keep_alive() should have same "
                     "value in both on_message_complete and on_headers_complete "
                     "but it doesn't! ***\n\n");
     EXIT();
   }
-#endif
   messages[num_messages].message_complete_cb_called = TRUE;
 
   messages[num_messages].message_complete_on_eof = currently_parsing_eof;
