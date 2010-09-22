@@ -1717,7 +1717,7 @@ size_t http_parser_execute (http_parser *parser,
         (data[ndata - 1].type == HTTP_NEEDS_INPUT ||
          data[ndata - 1].type == HTTP_NEEDS_DATA_ELEMENTS)) {
       /* We've parsed only as far as the data point */
-      read += data[ndata - 1].p - buf + 1;
+      read += data[ndata - 1].p - (buf+read) + 1;
     } else {
       /* We've parsed the whole thing that was passed in. */
       read += buf_len - read;

@@ -948,7 +948,7 @@ message_complete_cb (http_parser *p)
                     "value in both on_message_complete and on_headers_complete "
                     "but it doesn't! ***\n\n");
     assert(0);
-    assert(0);
+    exit(1);
   }
   messages[num_messages].message_complete_cb_called = TRUE;
 
