@@ -42,13 +42,23 @@ typedef unsigned __int32 uint32_t;
 
 #define RECORD_MARK_NOCLEAR(FOR)                  \
 do {                                              \
-  assert(data_index + 1 < data_len);              \
-  data[data_index].p = FOR##_mark;                \
-  data[data_index].len = p - FOR##_mark;          \
-  data[data_index].type = HTTP_##FOR;             \
-  data_index++;                                   \
+  if (FOR##_mark) {                               \
+    assert(data_index + 1 < data_len);            \
+    data[data_index].p = FOR##_mark;              \
+    data[data_index].len = p - FOR##_mark;        \
+    data[data_index].type = HTTP_##FOR;           \
+    data_index++;                                 \
+  }                                               \
 } while (0)
 
+#define RECORD_BODY(LEN)                          \
+do {                                              \
+  assert(data_index + 1 < data_len);              \
+  data[data_index].p = p;                         \
+  data[data_index].len = (LEN);                   \
+  data[data_index].type = HTTP_BODY;              \
+  data_index++;                                   \
+} while (0)
 #define RECORD_MARK(FOR)                          \
 do {                                              \
   RECORD_MARK_NOCLEAR(FOR);                       \
@@ -346,8 +356,6 @@ int http_parser_execute2(http_parser *parser,
   const char *QUERY_STRING_mark = 0;
   const char *PATH_mark = 0;
   const char *URL_mark = 0;
-
-  const char *BODY_mark = 0;
 
   if (state == s_header_field)
     HEADER_FIELD_mark = buf;
@@ -1420,9 +1428,8 @@ int http_parser_execute2(http_parser *parser,
       case s_body_identity:
         to_read = MIN(pe - p, (int64_t)parser->content_length);
         if (to_read > 0) {
-          MARK(BODY);
+          RECORD_BODY(to_read);
           p += to_read - 1;
-          RECORD_MARK(BODY);
 
           parser->content_length -= to_read;
 
@@ -1437,9 +1444,8 @@ int http_parser_execute2(http_parser *parser,
       case s_body_identity_eof:
         to_read = pe - p;
         if (to_read > 0) {
-          MARK(BODY);
+          RECORD_BODY(to_read);
           p += to_read - 1;
-          RECORD_MARK(BODY);
         }
         break;
 
@@ -1510,9 +1516,8 @@ int http_parser_execute2(http_parser *parser,
         to_read = MIN(pe - p, (int64_t)(parser->content_length));
 
         if (to_read > 0) {
-          MARK(BODY);
+          RECORD_BODY(to_read);
           p += to_read - 1;
-          RECORD_MARK(BODY);
         }
 
         if (to_read == parser->content_length) {
@@ -1553,12 +1558,12 @@ exit:
   parser->header_state = header_state;
   parser->index = index;
   parser->nread = nread;
-  return data_index + 1;
+  return data_index;
 
 error:
   RECORD(PARSER_ERROR);
   parser->state = s_dead;
-  return data_index + 1;
+  return data_index;
 }
 
 
@@ -1589,9 +1594,14 @@ size_t http_parser_execute (http_parser *parser,
 # define DATA_SIZE 50
   http_parser_data data[DATA_SIZE];
   int i, ndata;
+  size_t read = 0;
 
-  while (1) {
-    ndata = http_parser_execute2(parser, buf, buf_len, data, DATA_SIZE);
+  while (read < buf_len) {
+    ndata = http_parser_execute2(parser,
+                                 buf + read,
+                                 buf_len - read,
+                                 data,
+                                 DATA_SIZE);
 
     for (i = 0; i < ndata; i++) {
       switch (data[i].type) {
@@ -1607,7 +1617,7 @@ size_t http_parser_execute (http_parser *parser,
           break;
 
         case HTTP_NEEDS_DATA_ELEMENTS:
-          // HTTP_NEEDS_DATA_ELEMENTS should always be the last element of 'data'
+          // HTTP_NEEDS_DATA_ELEMENTS is the last element of 'data'
           assert(ndata - 1 == i);
           // Go around the while loop again.
           break;
@@ -1666,8 +1676,18 @@ size_t http_parser_execute (http_parser *parser,
           break;
        }
     }
+
+    // If the last data element is NEEDS_INPUT or NEEDS_DATA_ELEMENTS
+    // Go round the loop again.
+    if (ndata > 0 && 
+        (data[ndata - 1].type == HTTP_NEEDS_INPUT ||
+         data[ndata - 1].type == HTTP_NEEDS_DATA_ELEMENTS)) {
+      read += data[ndata - 1].p - buf + 1;
+    } else {
+      read += buf_len;
+    }
   }
-  return buf_len;
+  return read;
 }
 
 

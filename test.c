@@ -1301,7 +1301,7 @@ test_no_overflow_long_body (int req, size_t length)
   http_parser_init(&parser, req ? HTTP_REQUEST : HTTP_RESPONSE);
   size_t parsed;
   size_t i;
-  char buf1[3000];
+  char buf1[300];
   size_t buf1len = sprintf(buf1, "%s\r\nConnection: Keep-Alive\r\nContent-Length: %zu\r\n\r\n",
       req ? "POST / HTTP/1.0" : "HTTP/1.0 200 OK", length);
   parsed = http_parser_execute(&parser, &settings_null, buf1, buf1len);
