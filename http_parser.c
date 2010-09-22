@@ -388,10 +388,7 @@ int http_parser_execute2(http_parser *parser,
   if (state == s_decide_body) {
     assert(parser->type == HTTP_RESPONSE);
     state = body_logic(parser, p, data, data_len, &data_index);
-
-  } 
-
-  if (buf_len == 0) {
+  } else if (buf_len == 0) {
     if (state == s_body_identity_eof) {
       RECORD(MESSAGE_END);
     }
@@ -1629,7 +1626,7 @@ size_t http_parser_execute (http_parser *parser,
   int i, ndata;
   size_t read = 0;
 
-  do {
+  while (1) {
     ndata = http_parser_execute2(parser,
                                  buf + read,
                                  buf_len - read,
@@ -1718,12 +1715,13 @@ size_t http_parser_execute (http_parser *parser,
          data[ndata - 1].type == HTTP_NEEDS_DATA_ELEMENTS)) {
       /* We've parsed only as far as the data point */
       read += data[ndata - 1].p - (buf+read) + 1;
+      continue;
     } else {
       /* We've parsed the whole thing that was passed in. */
       read += buf_len - read;
+      if (read >= buf_len) break;
     }
-
-  } while (read < buf_len);
+  }
   return read;
 }
 
