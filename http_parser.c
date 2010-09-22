@@ -69,7 +69,7 @@ do {                                              \
 #define RECORD(FOR)                               \
 do {                                              \
   assert(data_index + 1 < data_len);              \
-  data[data_index].payload.string.p = p;          \
+  data[data_index].payload.string.p = p+1;        \
   data[data_index].payload.string.len = 0;        \
   data[data_index].type = HTTP_##FOR;             \
   data_index++;                                   \
@@ -429,7 +429,10 @@ int http_parser_execute2(http_parser *parser,
 
     // We always need at least enough space to put two elements on the data. 
     if (data_index + 2 >= data_len) {
-      RECORD(NEEDS_DATA_ELEMENTS);
+      data[data_index].payload.string.p = p;
+      data[data_index].payload.string.len = 0;
+      data[data_index].type = HTTP_NEEDS_DATA_ELEMENTS;
+      data_index++;
       goto exit; 
     }
 
@@ -1765,12 +1768,11 @@ size_t http_parser_execute (http_parser *parser,
     /* If the last data element is NEEDS_INPUT or NEEDS_DATA_ELEMENTS
      * Go round the loop again. (Note to self: This API isn't very nice...)
      */
-    if (ndata > 0 && 
-        (data[ndata - 1].type == HTTP_NEEDS_INPUT ||
-         data[ndata - 1].type == HTTP_NEEDS_DATA_ELEMENTS)) {
+    if (ndata > 0 && (data[ndata - 1].type == HTTP_NEEDS_INPUT ||
+        data[ndata - 1].type == HTTP_NEEDS_DATA_ELEMENTS)) {
       /* We've parsed only as far as the data point */
-      read += data[ndata - 1].payload.string.p - (buf+read) + 1;
-      continue;
+      read += data[ndata - 1].payload.string.p - (buf+read);
+
     } else {
       /* We've parsed the whole thing that was passed in. */
       read += buf_len - read;
