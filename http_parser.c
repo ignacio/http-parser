@@ -75,6 +75,7 @@ do {                                              \
 } while (0)
 
 
+
 #define PROXY_CONNECTION "proxy-connection"
 #define CONNECTION "connection"
 #define CONTENT_LENGTH "content-length"
@@ -244,11 +245,13 @@ enum state
   , s_header_almost_done
 
   , s_headers_almost_done
-  , s_headers_done
-  /* Important: 's_headers_done' must be the last 'header' state. All
+  /* Important: 's_headers_almost_done' must be the last 'header' state. All
    * states beyond this must be 'body' states. It is used for overflow
    * checking. See the PARSING_HEADER() macro.
    */
+
+  /* Fake state for responses which get punted out of http_parser_execute2 */
+  , s_decide_body
 
   , s_chunk_size_start
   , s_chunk_size
@@ -263,7 +266,7 @@ enum state
   };
 
 
-#define PARSING_HEADER(state) (state <= s_headers_done && 0 == (parser->flags & F_TRAILING))
+#define PARSING_HEADER(state) (state <= s_headers_almost_done && 0 == (parser->flags & F_TRAILING))
 
 
 enum header_states
@@ -319,6 +322,48 @@ enum flags
 # define NEW_MESSAGE() start_state
 #endif
 
+
+static inline
+int body_logic (http_parser *parser,
+                const char *p,
+                http_parser_data data[],
+                int data_len,
+                int *data_index_)
+{
+  int state; 
+  int data_index = *data_index_;
+
+  if (parser->flags & F_SKIPBODY) {
+    RECORD(MESSAGE_END);
+    state = NEW_MESSAGE();
+  } else if (parser->flags & F_CHUNKED) {
+    /* chunked encoding - ignore Content-Length header */
+    state = s_chunk_size_start;
+  } else {
+    if (parser->content_length == 0) {
+      /* Content-Length header given but zero: Content-Length: 0\r\n */
+      RECORD(MESSAGE_END);
+      state = NEW_MESSAGE();
+    } else if (parser->content_length > 0) {
+      /* Content-Length header given and non-zero */
+      state = s_body_identity;
+    } else {
+      if (parser->type == HTTP_REQUEST || http_should_keep_alive(parser)) {
+        /* Assume content-length 0 - read the next */
+        RECORD(MESSAGE_END);
+        state = NEW_MESSAGE();
+      } else {
+        /* Read body until EOF */
+        state = s_body_identity_eof;
+      }
+    }
+  }
+
+  *data_index_ = data_index;
+  return state;
+}
+
+
 int http_parser_execute2(http_parser *parser,
                          const char *buf,
                          size_t buf_len,
@@ -345,6 +390,11 @@ int http_parser_execute2(http_parser *parser,
       RECORD(MESSAGE_END);
     }
     goto exit;
+  }
+
+  if (state == s_decide_body) {
+    assert(parser->type == HTTP_RESPONSE);
+    state = body_logic(parser, p, data, data_len, &data_index);
   }
 
   /* technically we could combine all of these (except for URL_mark) into one
@@ -1375,55 +1425,36 @@ int http_parser_execute2(http_parser *parser,
 
         RECORD(HEADERS_END);
 
-        state = s_headers_done;
-
         /* Exit, the rest of the connect is in a different protocol. */
         if (parser->upgrade) {
           RECORD(MESSAGE_END);
           goto exit;
         }
 
+        state = s_decide_body;
+
         if (parser->type == HTTP_RESPONSE) {
-          // We need to exit the function and get information.
+          /* RESPONSE PARSING: We need to exit the function and get
+           * information before knowing how to proceed. This could be a
+           * response to a HEAD request. We'll do body_logic() next time we
+           * enter http_parser_execute2().
+           */
           RECORD(NEEDS_INPUT);
           goto exit;
-        }
 
-        /* HTTP_REQUESTs pass thru to s_headers_done */
-      }
-
-      case s_headers_done:
-      {
-        /* HTTP_RESPONSE comes back here after http_parser_has_body is called */
-
-        if (parser->flags & F_SKIPBODY) {
-          RECORD(MESSAGE_END);
-          state = NEW_MESSAGE();
-        } else if (parser->flags & F_CHUNKED) {
-          /* chunked encoding - ignore Content-Length header */
-          state = s_chunk_size_start;
         } else {
-          if (parser->content_length == 0) {
-            /* Content-Length header given but zero: Content-Length: 0\r\n */
-            RECORD(MESSAGE_END);
-            state = NEW_MESSAGE();
-          } else if (parser->content_length > 0) {
-            /* Content-Length header given and non-zero */
-            state = s_body_identity;
-          } else {
-            if (parser->type == HTTP_REQUEST || http_should_keep_alive(parser)) {
-              /* Assume content-length 0 - read the next */
-              RECORD(MESSAGE_END);
-              state = NEW_MESSAGE();
-            } else {
-              /* Read body until EOF */
-              state = s_body_identity_eof;
-            }
-          }
+          /* REQUEST PARSING: Just make a decision about how to proceed on
+           * the body...
+           */
+          state = body_logic(parser, p, data, data_len, &data_index);
         }
 
         break;
       }
+
+      case s_decide_body:
+        assert(0 && "Should not reach this state");
+        break;
 
       case s_body_identity:
         to_read = MIN(pe - p, (int64_t)parser->content_length);
@@ -1596,7 +1627,7 @@ size_t http_parser_execute (http_parser *parser,
   int i, ndata;
   size_t read = 0;
 
-  while (read < buf_len) {
+  do {
     ndata = http_parser_execute2(parser,
                                  buf + read,
                                  buf_len - read,
@@ -1677,16 +1708,20 @@ size_t http_parser_execute (http_parser *parser,
        }
     }
 
-    // If the last data element is NEEDS_INPUT or NEEDS_DATA_ELEMENTS
-    // Go round the loop again.
+    /* If the last data element is NEEDS_INPUT or NEEDS_DATA_ELEMENTS
+     * Go round the loop again. (Note to self: This API isn't very nice...)
+     */
     if (ndata > 0 && 
         (data[ndata - 1].type == HTTP_NEEDS_INPUT ||
          data[ndata - 1].type == HTTP_NEEDS_DATA_ELEMENTS)) {
+      /* We've parsed only as far as the data point */
       read += data[ndata - 1].p - buf + 1;
     } else {
-      read += buf_len;
+      /* We've parsed the whole thing that was passed in. */
+      read += buf_len - read;
     }
-  }
+
+  } while (read < buf_len);
   return read;
 }
 
