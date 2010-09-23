@@ -1671,6 +1671,7 @@ size_t http_parser_execute (http_parser *parser,
   /* Fake the parser object being passed to the callbacks */
   http_parser fake_parser;
   fake_parser.data = parser->data;
+  fake_parser.type = parser->type;
 
   while (1) {
     ndata = http_parser_execute2(parser,
